@@ -10,13 +10,13 @@ export async function POST(request: NextRequest) {
   try {
     const { selectedRepositories, analyzeAll = true } = await request.json() as ReportOptions;
     
-    // Get GitHub token from request headers
-    const githubToken = request.headers.get('x-github-token') || '';
-    const openaiToken = request.headers.get('x-openai-token') || '';
+    // Get tokens from environment variables instead of headers
+    const githubToken = process.env.GITHUB_TOKEN || '';
+    const openaiToken = process.env.OPENAI_API_KEY || '';
     
     if (!openaiToken) {
       return NextResponse.json(
-        { success: false, message: 'OpenAI API key is required for generating reports' },
+        { success: false, message: 'OpenAI API key is not configured in environment variables' },
         { status: 401 }
       );
     }

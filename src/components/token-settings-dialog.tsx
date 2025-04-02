@@ -1,110 +1,107 @@
 "use client";
 
-import { useState, useEffect } from 'react';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
+import { useState, useEffect } from "react";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
 interface TokenSettingsDialogProps {
-  isOpen: boolean;
-  onClose: () => void;
-  onSave: (githubToken: string, openaiToken: string) => void;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onTokensUpdated: () => void;
 }
 
-export default function TokenSettingsDialog({ isOpen, onClose, onSave }: TokenSettingsDialogProps) {
-  const [githubToken, setGithubToken] = useState('');
-  const [openaiToken, setOpenaiToken] = useState('');
+export default function TokenSettingsDialog({ 
+  open, 
+  onOpenChange,
+  onTokensUpdated
+}: TokenSettingsDialogProps) {
+  const [githubToken, setGithubToken] = useState("");
+  const [openaiToken, setOpenaiToken] = useState("");
   const [isSaving, setIsSaving] = useState(false);
-
-  // Load existing tokens when dialog opens
+  
+  // Load tokens from localStorage on component mount
   useEffect(() => {
-    if (isOpen) {
-      const savedGithubToken = localStorage.getItem('github_token') || '';
-      const savedOpenaiToken = localStorage.getItem('openai_token') || '';
-      setGithubToken(savedGithubToken);
-      setOpenaiToken(savedOpenaiToken);
+    if (open) {
+      const storedGithubToken = localStorage.getItem('github_token') || "";
+      const storedOpenaiToken = localStorage.getItem('openai_token') || "";
+      
+      setGithubToken(storedGithubToken);
+      setOpenaiToken(storedOpenaiToken);
     }
-  }, [isOpen]);
-
-  const handleSave = () => {
+  }, [open]);
+  
+  const saveTokens = () => {
     setIsSaving(true);
     
-    // Save tokens to localStorage
-    if (githubToken) {
+    try {
+      // Save tokens to localStorage
       localStorage.setItem('github_token', githubToken);
-    } else {
-      localStorage.removeItem('github_token');
+      
+      if (openaiToken) {
+        localStorage.setItem('openai_token', openaiToken);
+      }
+      
+      // Notify parent component that tokens have been updated
+      onTokensUpdated();
+      
+      // Close dialog
+      onOpenChange(false);
+    } catch (error) {
+      console.error('Error saving tokens:', error);
+    } finally {
+      setIsSaving(false);
     }
-    
-    if (openaiToken) {
-      localStorage.setItem('openai_token', openaiToken);
-    } else {
-      localStorage.removeItem('openai_token');
-    }
-    
-    setIsSaving(false);
-    onSave(githubToken, openaiToken);
-    onClose();
   };
-
+  
   return (
-    <Dialog open={isOpen} onOpenChange={onClose}>
-      <DialogContent className="sm:max-w-[425px]">
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>API Token Settings</DialogTitle>
           <DialogDescription>
             Enter your API tokens to enable full functionality.
           </DialogDescription>
         </DialogHeader>
+        
         <div className="grid gap-4 py-4">
-          <div className="grid grid-cols-4 items-center gap-4">
-            <Label htmlFor="github-token" className="text-right">
-              GitHub Token
-            </Label>
+          <div className="grid gap-2">
+            <Label htmlFor="github-token">GitHub Personal Access Token</Label>
             <Input
               id="github-token"
               type="password"
               value={githubToken}
               onChange={(e) => setGithubToken(e.target.value)}
-              placeholder="github_pat_..."
-              className="col-span-3"
+              placeholder="Enter your GitHub token"
             />
-          </div>
-          <div className="col-span-4 pl-[25%]">
-            <p className="text-sm text-gray-500">
+            <p className="text-xs text-gray-500">
               Required for fetching your repositories.
-              <br />
-              Create at: GitHub &gt; Settings &gt; Developer settings &gt; Personal access tokens
+              Create at: <a href="https://github.com/settings/tokens" target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">GitHub &gt; Settings &gt; Developer settings &gt; Personal access tokens</a>
             </p>
           </div>
           
-          <div className="grid grid-cols-4 items-center gap-4 mt-4">
-            <Label htmlFor="openai-token" className="text-right">
-              OpenAI API Key
-            </Label>
+          <div className="grid gap-2">
+            <Label htmlFor="openai-token">OpenAI API Key</Label>
             <Input
               id="openai-token"
               type="password"
               value={openaiToken}
               onChange={(e) => setOpenaiToken(e.target.value)}
-              placeholder="sk-..."
-              className="col-span-3"
+              placeholder="Enter your OpenAI API key (optional)"
             />
-          </div>
-          <div className="col-span-4 pl-[25%]">
-            <p className="text-sm text-gray-500">
+            <p className="text-xs text-gray-500">
               Optional. Enables enhanced repository insights.
-              <br />
-              Get your API key from: <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:underline">OpenAI API Keys</a>
+              Get your API key from: <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">OpenAI API Keys</a>
             </p>
           </div>
         </div>
+        
         <DialogFooter>
-          <Button type="button" variant="outline" onClick={onClose}>
+          <Button onClick={() => onOpenChange(false)} variant="outline">
             Cancel
           </Button>
-          <Button type="button" onClick={handleSave} disabled={isSaving}>
+          <Button onClick={saveTokens} disabled={isSaving || !githubToken}>
             {isSaving ? "Saving..." : "Save Tokens"}
           </Button>
         </DialogFooter>

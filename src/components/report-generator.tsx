@@ -22,21 +22,10 @@ export default function ReportGenerator({ repositories, selectedRepos }: ReportG
     setError(null);
     
     try {
-      const githubToken = localStorage.getItem('github_token');
-      const openaiToken = localStorage.getItem('openai_token');
-      
-      if (!openaiToken) {
-        setError("OpenAI API key is required for generating reports. Please set your API key in settings.");
-        setIsGenerating(false);
-        return;
-      }
-      
       const response = await fetch('/api/report', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'x-github-token': githubToken || '',
-          'x-openai-token': openaiToken || ''
         },
         body: JSON.stringify({
           selectedRepositories: Array.from(selectedRepos),

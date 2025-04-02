@@ -12,95 +12,10 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import RepositoryInsights from "@/components/repository-insights";
-import TokenSettingsDialog from "@/components/token-settings-dialog";
 import ReportGenerator from "@/components/report-generator";
 import { getRepositoryDatabase } from "@/lib/db";
 
-// Direct GitHub API client-side functions
-async function fetchRepositoriesFromGitHub(token: string): Promise<any[]> {
-  try {
-    const response = await fetch('https://api.github.com/user/repos?per_page=100', {
-      headers: {
-        'Authorization': `token ${token}`,
-        'Accept': 'application/vnd.github.v3+json'
-      }
-    });
-    
-    if (!response.ok) {
-      throw new Error(`GitHub API error: ${response.status}`);
-    }
-    
-    return await response.json();
-  } catch (error) {
-    console.error('Error fetching repositories from GitHub:', error);
-    throw error;
-  }
-}
-
-async function fetchRepositoryLanguages(repo: any, token: string): Promise<Record<string, number>> {
-  try {
-    const response = await fetch(repo.languages_url, {
-      headers: {
-        'Authorization': `token ${token}`,
-        'Accept': 'application/vnd.github.v3+json'
-      }
-    });
-    
-    if (!response.ok) {
-      throw new Error(`GitHub API error: ${response.status}`);
-    }
-    
-    return await response.json();
-  } catch (error) {
-    console.error(`Error fetching languages for ${repo.name}:`, error);
-    return {};
-  }
-}
-
-// Process GitHub API data into our Repository format
-async function processRepositoryData(repos: any[], token: string): Promise<Repository[]> {
-  const now = new Date();
-  const processedRepos: Repository[] = [];
-  
-  for (const repo of repos) {
-    // Get primary language
-    let primaryLanguage = 'None';
-    try {
-      const languages = await fetchRepositoryLanguages(repo, token);
-      const entries = Object.entries(languages);
-      if (entries.length > 0) {
-        // Sort by byte count (descending)
-        entries.sort((a, b) => b[1] - a[1]);
-        primaryLanguage = entries[0][0];
-      }
-    } catch (error) {
-      console.error(`Error processing languages for ${repo.name}:`, error);
-    }
-    
-    const lastPushDate = new Date(repo.pushed_at);
-    const daysSinceLastPush = Math.floor((now.getTime() - lastPushDate.getTime()) / (1000 * 60 * 60 * 24));
-    
-    processedRepos.push({
-      name: repo.name,
-      description: repo.description || '',
-      url: repo.html_url,
-      createdAt: repo.created_at,
-      updatedAt: repo.updated_at,
-      pushedAt: repo.pushed_at,
-      isArchived: repo.archived,
-      diskUsage: repo.size,
-      diskUsageMB: repo.size / 1024, // Convert KB to MB
-      visibility: repo.private ? 'PRIVATE' : 'PUBLIC',
-      primaryLanguage,
-      daysSinceLastPush,
-      inactive: daysSinceLastPush > 180 // Inactive if no pushes in 6 months
-    });
-  }
-  
-  return processedRepos;
-}
-
-// Mock data for initial load when no token is available
+// Mock data for initial load when API is not available
 const mockRepositoryData: Repository[] = [
   {
     name: "example-repo-1",
@@ -171,31 +86,13 @@ export default function RepositoryManager() {
   const [showArchiveDialog, setShowArchiveDialog] = useState(false);
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [showInsightsDialog, setShowInsightsDialog] = useState(false);
-  const [showReportDialog, setShowReportDialog] = useState(false);
   const [selectedRepository, setSelectedRepository] = useState<Repository | null>(null);
-  const [showTokenDialog, setShowTokenDialog] = useState(false);
-  const [hasToken, setHasToken] = useState(false);
-  const [hasOpenAIToken, setHasOpenAIToken] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [isDemo, setIsDemo] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [isDemo, setIsDemo] = useState(false);
   const [activeTab, setActiveTab] = useState<'repositories' | 'report'>('repositories');
 
   // Initialize database
   const db = getRepositoryDatabase();
-
-  // Check for tokens on component mount
-  useEffect(() => {
-    const githubToken = localStorage.getItem('github_token');
-    const openaiToken = localStorage.getItem('openai_token');
-    setHasToken(!!githubToken);
-    setHasOpenAIToken(!!openaiToken);
-    
-    // If no token is found, show the token dialog
-    if (!githubToken) {
-      setIsDemo(true);
-    }
-  }, []);
 
   // Fetch repository data on component mount
   useEffect(() => {
@@ -206,17 +103,6 @@ export default function RepositoryManager() {
       try {
         // Initialize the database
         await db.init();
-        
-        // Check if we have a GitHub token
-        const githubToken = localStorage.getItem('github_token');
-        
-        if (!githubToken) {
-          // If no token, use mock data
-          setRepositories(mockRepositoryData);
-          setIsDemo(true);
-          setIsLoading(false);
-          return;
-        }
         
         // Try to load from cache first
         const cachedRepos = await db.getRepositories();
@@ -231,19 +117,33 @@ export default function RepositoryManager() {
             refreshRepositoriesInBackground();
           }
         } else {
-          // No cache, fetch from GitHub API
-          const repos = await fetchRepositoriesFromGitHub(githubToken);
-          const processedRepos = await processRepositoryData(repos, githubToken);
+          // No cache, fetch from API
+          const response = await fetch('/api/repositories');
           
-          // Store in IndexedDB
-          await db.storeRepositories(processedRepos);
+          if (!response.ok) {
+            // If API fails, use mock data
+            setRepositories(mockRepositoryData);
+            setIsDemo(true);
+            throw new Error(`Error fetching repositories: ${response.statusText}`);
+          }
           
-          setRepositories(processedRepos);
-          setIsDemo(false);
+          const repos = await response.json();
+          
+          if (!repos || repos.length === 0 || repos.success === false) {
+            // If no repositories or error, use mock data
+            setRepositories(mockRepositoryData);
+            setIsDemo(true);
+          } else {
+            // Store in IndexedDB
+            await db.storeRepositories(repos);
+            
+            setRepositories(repos);
+            setIsDemo(false);
+          }
         }
       } catch (error) {
         console.error('Error loading repositories:', error);
-        setErrorMessage('Failed to load repositories. Please check your GitHub token and try again.');
+        setErrorMessage('Failed to load repositories. Using demo data instead.');
         setRepositories(mockRepositoryData);
         setIsDemo(true);
       } finally {
@@ -257,20 +157,23 @@ export default function RepositoryManager() {
   // Background refresh function
   const refreshRepositoriesInBackground = async () => {
     try {
-      const githubToken = localStorage.getItem('github_token');
+      const response = await fetch('/api/repositories');
       
-      if (!githubToken) {
-        return;
+      if (!response.ok) {
+        throw new Error(`Error fetching repositories: ${response.statusText}`);
       }
       
-      const repos = await fetchRepositoriesFromGitHub(githubToken);
-      const processedRepos = await processRepositoryData(repos, githubToken);
+      const repos = await response.json();
+      
+      if (!repos || repos.length === 0 || repos.success === false) {
+        throw new Error('No repositories returned from API');
+      }
       
       // Store in IndexedDB
-      await db.storeRepositories(processedRepos);
+      await db.storeRepositories(repos);
       
       // Update state
-      setRepositories(processedRepos);
+      setRepositories(repos);
       setIsDemo(false);
     } catch (error) {
       console.error('Error refreshing repositories in background:', error);
@@ -283,25 +186,26 @@ export default function RepositoryManager() {
     setErrorMessage(null);
     
     try {
-      const githubToken = localStorage.getItem('github_token');
+      const response = await fetch('/api/repositories');
       
-      if (!githubToken) {
-        setErrorMessage('GitHub token is required. Please set your token in settings.');
-        setIsRefreshing(false);
-        return;
+      if (!response.ok) {
+        throw new Error(`Error fetching repositories: ${response.statusText}`);
       }
       
-      const repos = await fetchRepositoriesFromGitHub(githubToken);
-      const processedRepos = await processRepositoryData(repos, githubToken);
+      const repos = await response.json();
+      
+      if (!repos || repos.length === 0 || repos.success === false) {
+        throw new Error('No repositories returned from API');
+      }
       
       // Store in IndexedDB
-      await db.storeRepositories(processedRepos);
+      await db.storeRepositories(repos);
       
-      setRepositories(processedRepos);
+      setRepositories(repos);
       setIsDemo(false);
     } catch (error) {
       console.error('Error refreshing repositories:', error);
-      setErrorMessage('Failed to refresh repositories. Please check your GitHub token and try again.');
+      setErrorMessage('Failed to refresh repositories. Please try again later.');
     } finally {
       setIsRefreshing(false);
     }
@@ -398,19 +302,10 @@ export default function RepositoryManager() {
     setErrorMessage(null);
     
     try {
-      const githubToken = localStorage.getItem('github_token');
-      
-      if (!githubToken) {
-        setErrorMessage('GitHub token is required. Please set your token in settings.');
-        setIsLoading(false);
-        return;
-      }
-      
       const response = await fetch('/api/archive', {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/json',
-          'x-github-token': githubToken
+          'Content-Type': 'application/json'
         },
         body: JSON.stringify({ repositories: Array.from(selectedRepos) }),
       });
@@ -445,19 +340,10 @@ export default function RepositoryManager() {
     setErrorMessage(null);
     
     try {
-      const githubToken = localStorage.getItem('github_token');
-      
-      if (!githubToken) {
-        setErrorMessage('GitHub token is required. Please set your token in settings.');
-        setIsLoading(false);
-        return;
-      }
-      
       const response = await fetch('/api/delete', {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/json',
-          'x-github-token': githubToken
+          'Content-Type': 'application/json'
         },
         body: JSON.stringify({ repositories: Array.from(selectedRepos) }),
       });
@@ -505,15 +391,7 @@ export default function RepositoryManager() {
       {isDemo && (
         <div className="bg-amber-50 border border-amber-200 text-amber-700 px-4 py-3 rounded mb-6">
           <p className="font-medium">Demo Mode</p>
-          <p>You're viewing example data. Set your GitHub token to see your actual repositories.</p>
-          <Button 
-            variant="outline" 
-            size="sm" 
-            onClick={() => setShowTokenDialog(true)}
-            className="mt-2"
-          >
-            Set GitHub Token
-          </Button>
+          <p>You're viewing example data. The application is configured to use environment variables for GitHub and OpenAI authentication.</p>
         </div>
       )}
       
@@ -653,13 +531,6 @@ export default function RepositoryManager() {
             <div className="flex gap-2">
               <Button 
                 variant="outline" 
-                onClick={() => setShowTokenDialog(true)}
-              >
-                Settings
-              </Button>
-              
-              <Button 
-                variant="outline" 
                 onClick={() => setShowArchiveDialog(true)}
                 disabled={selectedRepos.size === 0}
               >
@@ -755,7 +626,6 @@ export default function RepositoryManager() {
                           variant="ghost" 
                           size="sm"
                           onClick={() => showInsights(repo)}
-                          disabled={!hasOpenAIToken && !isDemo}
                         >
                           Insights
                         </Button>
@@ -770,17 +640,6 @@ export default function RepositoryManager() {
       ) : (
         <ReportGenerator repositories={repositories} selectedRepos={selectedRepos} />
       )}
-      
-      {/* Token settings dialog */}
-      <TokenSettingsDialog 
-        open={showTokenDialog} 
-        onOpenChange={setShowTokenDialog}
-        onTokensUpdated={() => {
-          setHasToken(!!localStorage.getItem('github_token'));
-          setHasOpenAIToken(!!localStorage.getItem('openai_token'));
-          refreshRepositories();
-        }}
-      />
       
       {/* Archive confirmation dialog */}
       <Dialog open={showArchiveDialog} onOpenChange={setShowArchiveDialog}>
