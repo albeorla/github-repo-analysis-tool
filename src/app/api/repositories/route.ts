@@ -66,6 +66,54 @@ export async function GET(request: NextRequest) {
       };
     }));
     
+    // Trigger background insight generation
+    // This is done after sending the response to avoid blocking the UI
+    if (processedRepos.length > 0) {
+      // We use setTimeout with 0 delay to move this to the next event loop iteration
+      // This ensures the response is sent before we start generating insights
+      setTimeout(async () => {
+        try {
+          console.log(`Starting background insight generation for ${processedRepos.length} repositories`);
+          
+          // We'll generate insights for the 10 most recently updated repositories
+          // to avoid overloading the server and API rate limits
+          const reposForInsights = processedRepos.slice(0, 10);
+          
+          for (const repo of reposForInsights) {
+            try {
+              // Call the insights API for each repository
+              await fetch(`${request.nextUrl.origin}/api/insights`, {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                  repositoryName: repo.name,
+                  repositoryUrl: repo.url,
+                  repositoryDescription: repo.description,
+                  primaryLanguage: repo.primaryLanguage,
+                  createdAt: repo.createdAt,
+                  updatedAt: repo.updatedAt
+                })
+              });
+              
+              console.log(`Generated insights for repository: ${repo.name}`);
+              
+              // Add a small delay between requests to avoid rate limiting
+              await new Promise(resolve => setTimeout(resolve, 1000));
+            } catch (error) {
+              console.error(`Error generating insights for ${repo.name}:`, error);
+              // Continue with the next repository even if one fails
+            }
+          }
+          
+          console.log('Background insight generation completed');
+        } catch (error) {
+          console.error('Error in background insight generation:', error);
+        }
+      }, 0);
+    }
+    
     return NextResponse.json(processedRepos);
   } catch (error) {
     console.error('Error fetching repositories:', error);
