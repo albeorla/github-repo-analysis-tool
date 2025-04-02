@@ -1,16 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { Repository } from '@/types/repository';
+import OpenAI from 'openai';
 
-interface ReportOptions {
-  selectedRepositories?: string[];
-  analyzeAll?: boolean;
-}
+export const maxDuration = 60; // Increase timeout to 60 seconds
 
 export async function POST(request: NextRequest) {
   try {
-    const { selectedRepositories, analyzeAll = true } = await request.json() as ReportOptions;
+    const { selectedRepositories, analyzeAll = true } = await request.json();
     
-    // Get tokens from environment variables instead of headers
+    // Get tokens from environment variables
     const githubToken = process.env.GITHUB_TOKEN || '';
     const openaiToken = process.env.OPENAI_API_KEY || '';
     
@@ -22,7 +19,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Fetch repositories data
-    let repositories: Repository[] = [];
+    let repositories = [];
     try {
       const repoResponse = await fetch(`${request.nextUrl.origin}/api/repositories`, {
         headers: {
@@ -57,19 +54,29 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Prepare repository data for analysis
-    const repoAnalysisData = repositories.map(repo => ({
+    // Limit the number of repositories to analyze to prevent timeouts
+    const MAX_REPOS_TO_ANALYZE = 10;
+    let reposToAnalyze = repositories;
+    let repoCountMessage = '';
+    
+    if (repositories.length > MAX_REPOS_TO_ANALYZE) {
+      // Sort by most recently updated
+      repositories.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+      reposToAnalyze = repositories.slice(0, MAX_REPOS_TO_ANALYZE);
+      repoCountMessage = `Note: Analyzing only the ${MAX_REPOS_TO_ANALYZE} most recently updated repositories out of ${repositories.length} total repositories to prevent timeout.`;
+    }
+
+    // Prepare repository data for analysis - only essential data to reduce payload size
+    const repoAnalysisData = reposToAnalyze.map(repo => ({
       name: repo.name,
       description: repo.description,
-      url: repo.url,
-      isArchived: repo.isArchived,
       visibility: repo.visibility,
       createdAt: repo.createdAt,
       updatedAt: repo.updatedAt,
       pushedAt: repo.pushedAt,
       daysSinceLastPush: repo.daysSinceLastPush,
       inactive: repo.inactive,
-      diskUsageMB: repo.diskUsageMB,
+      isArchived: repo.isArchived,
       primaryLanguage: repo.primaryLanguage
     }));
 
@@ -79,74 +86,72 @@ export async function POST(request: NextRequest) {
     const publicRepos = repositories.filter(repo => repo.visibility === 'PUBLIC').length;
     const archivedRepos = repositories.filter(repo => repo.isArchived).length;
     const inactiveRepos = repositories.filter(repo => repo.inactive).length;
-    const totalSizeMB = repositories.reduce((sum, repo) => sum + repo.diskUsageMB, 0);
     
-    // Count repositories by language
-    const languages: Record<string, number> = {};
+    // Count repositories by language (limit to top 5 languages)
+    const languageCounts = {};
     repositories.forEach(repo => {
       if (repo.primaryLanguage && repo.primaryLanguage !== 'None') {
-        languages[repo.primaryLanguage] = (languages[repo.primaryLanguage] || 0) + 1;
+        languageCounts[repo.primaryLanguage] = (languageCounts[repo.primaryLanguage] || 0) + 1;
       }
     });
+    
+    const topLanguages = Object.entries(languageCounts)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 5)
+      .map(([lang, count]) => `${lang}: ${count} repositories`);
 
-    // Generate report using OpenAI API
+    // Generate report using OpenAI API with optimized prompt
     try {
-      const response = await fetch('https://api.openai.com/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${openaiToken}`
-        },
-        body: JSON.stringify({
-          model: "gpt-4o",
-          messages: [
-            {
-              role: "system",
-              content: `You are a GitHub repository analysis expert that provides detailed reports and recommendations. 
-              Your task is to analyze repository data and provide actionable insights on how repositories should be managed.
-              Format your response in markdown with clear sections, headings, and bullet points.
-              Focus on identifying repositories that should be archived, deleted, or maintained based on activity, size, and purpose.
-              Look for consolidation opportunities where similar repositories could be merged.
-              Provide specific, actionable recommendations for each repository.`
-            },
-            {
-              role: "user",
-              content: `Please analyze the following GitHub repositories and generate a detailed report with recommendations.
-              
-              Repository Statistics:
-              - Total Repositories: ${totalRepos}
-              - Private Repositories: ${privateRepos}
-              - Public Repositories: ${publicRepos}
-              - Already Archived Repositories: ${archivedRepos}
-              - Inactive Repositories (no pushes in last 6 months): ${inactiveRepos}
-              - Total Size: ${totalSizeMB.toFixed(2)} MB
-              
-              Languages Used:
-              ${Object.entries(languages).map(([lang, count]) => `- ${lang}: ${count} repositories`).join('\n')}
-              
-              Repository Details:
-              ${JSON.stringify(repoAnalysisData, null, 2)}
-              
-              Please provide:
-              1. Executive Summary
-              2. Repository Analysis (categorized by activity, importance, and maintenance needs)
-              3. Specific Recommendations for each repository (archive, delete, maintain, consolidate)
-              4. Action Plan with prioritized steps
-              
-              Format the report in markdown with clear headings and sections.`
-            }
-          ],
-          temperature: 0.7,
-          max_tokens: 4000
-        })
+      const openai = new OpenAI({
+        apiKey: openaiToken,
       });
       
-      if (!response.ok) {
-        throw new Error(`OpenAI API error: ${response.status}`);
-      }
+      const response = await openai.chat.completions.create({
+        model: "gpt-4o",
+        messages: [
+          {
+            role: "system",
+            content: `You are a GitHub repository analysis expert that provides concise, actionable reports.
+            Analyze repository data and provide recommendations on which repositories should be archived, deleted, or maintained.
+            Format your response in markdown with clear sections and bullet points.
+            Be direct and specific in your recommendations.`
+          },
+          {
+            role: "user",
+            content: `Please analyze these GitHub repositories and generate a report with recommendations.
+            
+            Repository Statistics:
+            - Total Repositories: ${totalRepos}
+            - Private Repositories: ${privateRepos}
+            - Public Repositories: ${publicRepos}
+            - Already Archived: ${archivedRepos}
+            - Inactive (no pushes in 6+ months): ${inactiveRepos}
+            
+            Top Languages:
+            ${topLanguages.join('\n')}
+            
+            ${repoCountMessage}
+            
+            Repository Details:
+            ${JSON.stringify(repoAnalysisData, null, 2)}
+            
+            Please provide:
+            1. Executive Summary (2-3 sentences)
+            2. Key Recommendations (bullet points)
+            3. Repository Analysis by Category:
+               - Candidates for Archiving
+               - Candidates for Deletion
+               - Active Repositories to Maintain
+            4. Action Plan (prioritized steps)
+            
+            Format in markdown with clear headings.`
+          }
+        ],
+        temperature: 0.7,
+        max_tokens: 2000 // Reduced token count to prevent timeouts
+      });
       
-      const data = await response.json();
-      const reportContent = data.choices[0].message.content;
+      const reportContent = response.choices[0].message.content;
       
       // Add report metadata
       const reportDate = new Date().toISOString();
@@ -159,6 +164,7 @@ export async function POST(request: NextRequest) {
         metadata: {
           generatedAt: reportDate,
           repositoryCount: totalRepos,
+          analyzedCount: reposToAnalyze.length,
           inactiveCount: inactiveRepos
         }
       });

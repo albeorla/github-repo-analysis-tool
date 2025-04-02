@@ -222,6 +222,23 @@ export class RepositoryDatabase {
     return diffDays > 7; // Expire after 7 days
   }
 
+  // Check if data is expired (older than 1 day)
+  isDataExpired(): boolean {
+    return this.isLastUpdateOlderThan(1);
+  }
+
+  // Check if last update is older than specified days
+  async isLastUpdateOlderThan(days: number): Promise<boolean> {
+    const lastUpdate = await this.getLastRepoUpdateTime();
+    if (!lastUpdate) return true;
+    
+    const lastUpdateDate = new Date(lastUpdate);
+    const now = new Date();
+    const diffTime = Math.abs(now.getTime() - lastUpdateDate.getTime());
+    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+    return diffDays > days;
+  }
+
   // Get last repository update time
   async getLastRepoUpdateTime(): Promise<string | null> {
     if (!this.db) {
