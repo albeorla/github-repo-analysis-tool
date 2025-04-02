@@ -1,8 +1,14 @@
+// Update the GitHub token header in API calls
 import { Repository } from "@/types/repository";
 
 export async function fetchRepositoryData(): Promise<Repository[]> {
   try {
-    const response = await fetch('/api/repositories');
+    const githubToken = localStorage.getItem('github_token');
+    const response = await fetch('/api/repositories', {
+      headers: {
+        'x-github-token': githubToken || '',
+      }
+    });
     if (!response.ok) {
       throw new Error(`Error fetching repositories: ${response.statusText}`);
     }
@@ -15,10 +21,12 @@ export async function fetchRepositoryData(): Promise<Repository[]> {
 
 export async function refreshRepositoryData(): Promise<{ success: boolean; message: string }> {
   try {
+    const githubToken = localStorage.getItem('github_token');
     const response = await fetch('/api/refresh', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        'x-github-token': githubToken || '',
       },
     });
     
@@ -40,12 +48,14 @@ export async function refreshRepositoryData(): Promise<{ success: boolean; messa
   }
 }
 
-export async function archiveRepositories(repoNames: string[]): Promise<{ success: boolean; message: string }> {
+export async function archiveRepositories(repoNames: string[]): Promise<{ success: boolean; message: string; archivePath?: string }> {
   try {
+    const githubToken = localStorage.getItem('github_token');
     const response = await fetch('/api/archive', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        'x-github-token': githubToken || '',
       },
       body: JSON.stringify({ repositories: repoNames }),
     });
@@ -58,6 +68,7 @@ export async function archiveRepositories(repoNames: string[]): Promise<{ succes
     return {
       success: result.success,
       message: result.message || `Successfully archived ${repoNames.length} repositories`,
+      archivePath: result.archivePath,
     };
   } catch (error) {
     console.error('Failed to archive repositories:', error);
@@ -68,12 +79,14 @@ export async function archiveRepositories(repoNames: string[]): Promise<{ succes
   }
 }
 
-export async function deleteRepositories(repoNames: string[]): Promise<{ success: boolean; message: string; results?: Array<{ name: string; success: boolean; message: string }> }> {
+export async function deleteRepositories(repoNames: string[]): Promise<{ success: boolean; message: string; results?: Array<{ name: string; success: boolean; error?: string }> }> {
   try {
+    const githubToken = localStorage.getItem('github_token');
     const response = await fetch('/api/delete', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        'x-github-token': githubToken || '',
       },
       body: JSON.stringify({ repositories: repoNames }),
     });

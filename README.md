@@ -1,36 +1,105 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# GitHub Repository Analysis - Consolidated Application
+
+This application provides a comprehensive GitHub repository management and analysis tool with the following features:
+
+- View and filter your GitHub repositories
+- Generate AI-powered insights about your repositories
+- Archive repositories for backup
+- Delete repositories you no longer need
+- Analyze repository statistics and trends
 
 ## Getting Started
 
-First, run the development server:
+### Prerequisites
+
+- Node.js 18+ and npm
+- GitHub Personal Access Token with appropriate permissions
+- OpenAI API key (for repository insights)
+
+### Environment Setup
+
+1. Clone this repository
+2. Install dependencies:
+   ```bash
+   npm install
+   ```
+3. Create a `.env.local` file with the following variables:
+   ```
+   GITHUB_TOKEN=your_github_token
+   OPENAI_API_KEY=your_openai_api_key
+   ```
+
+### Development
+
+Run the development server:
 
 ```bash
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open [http://localhost:3000](http://localhost:3000) with your browser to see the application.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+### Building for Production
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+```bash
+npm run build
+npm start
+```
 
-## Learn More
+## Features
 
-To learn more about Next.js, take a look at the following resources:
+### Repository Management
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+- View all your GitHub repositories
+- Filter repositories by visibility (public/private)
+- Filter repositories by activity status
+- Filter repositories by primary language
+- Search repositories by name
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+### Repository Insights
 
-## Deploy on Vercel
+The application uses OpenAI to generate insights about your repositories, including:
+- Purpose assessment
+- Maintenance recommendations
+- Improvement suggestions
+- Potential concerns
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+### Repository Archiving
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+You can create backups of selected repositories by archiving them. The application will:
+1. Clone the repositories
+2. Remove .git directories to save space
+3. Create a zip archive
+4. Provide a download link
+
+### Repository Deletion
+
+You can delete repositories you no longer need. The application will:
+1. Confirm your intention to delete
+2. Use the GitHub API to delete the repositories
+3. Provide status updates for each deletion
+
+## API Endpoints
+
+- `GET /api/repositories` - Get list of repositories
+- `POST /api/refresh` - Refresh repository data
+- `POST /api/archive` - Archive selected repositories
+- `POST /api/delete` - Delete selected repositories
+- `POST /api/insights` - Generate insights for a repository
+
+## Architecture
+
+This application is built with:
+- Next.js for the frontend and API routes
+- React for the UI components
+- IndexedDB for client-side storage
+- GitHub API for repository data
+- OpenAI API for generating insights
+
+## Contributing
+
+Contributions are welcome! Please feel free to submit a Pull Request.
+
+## License
+
+This project is licensed under the MIT License - see the LICENSE file for details.

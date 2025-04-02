@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GitHub Repository Manager</title>
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+    <header>
+        <div class="container">
+            <h1>GitHub Repository Manager</h1>
+            <div class="btn-group">
+                <button id="refresh-btn" class="btn btn-success">Refresh Repository Data</button>
+                <button id="select-all-btn" class="btn btn-primary">Select All</button>
+                <button id="deselect-all-btn" class="btn btn-primary">Deselect All</button>
+            </div>
+        </div>
+    </header>
+
+    <div class="container">
+        <div class="summary">
+            <h2>Repository Summary</h2>
+            <div class="summary-grid">
+                <div class="summary-item">
+                    <h3>Total Repositories</h3>
+                    <div id="total-repos" class="summary-value">0</div>
+                </div>
+                <div class="summary-item">
+                    <h3>Private Repositories</h3>
+                    <div id="private-repos" class="summary-value">0</div>
+                </div>
+                <div class="summary-item">
+                    <h3>Public Repositories</h3>
+                    <div id="public-repos" class="summary-value">0</div>
+                </div>
+                <div class="summary-item">
+                    <h3>Archived Repositories</h3>
+                    <div id="archived-repos" class="summary-value">0</div>
+                </div>
+                <div class="summary-item">
+                    <h3>Inactive Repositories</h3>
+                    <div id="inactive-repos" class="summary-value">0</div>
+                </div>
+                <div class="summary-item">
+                    <h3>Total Size</h3>
+                    <div id="total-size" class="summary-value">0 MB</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="controls">
+            <div class="filters">
+                <div class="filter-group">
+                    <label for="search">Search:</label>
+                    <input type="text" id="search" class="search-box" placeholder="Search repositories...">
+                </div>
+                <div class="filter-group">
+                    <label for="visibility-filter">Visibility:</label>
+                    <select id="visibility-filter">
+                        <option value="all">All</option>
+                        <option value="PRIVATE">Private</option>
+                        <option value="PUBLIC">Public</option>
+                    </select>
+                </div>
+                <div class="filter-group">
+                    <label for="activity-filter">Activity:</label>
+                    <select id="activity-filter">
+                        <option value="all">All</option>
+                        <option value="active">Active</option>
+                        <option value="inactive">Inactive (6+ months)</option>
+                    </select>
+                </div>
+                <div class="filter-group">
+                    <label for="language-filter">Language:</label>
+                    <select id="language-filter">
+                        <option value="all">All</option>
+                        <!-- Languages will be populated by JavaScript -->
+                    </select>
+                </div>
+            </div>
+            <div class="btn-group">
+                <button id="archive-btn" class="btn btn-success">Archive Selected</button>
+                <button id="delete-btn" class="btn btn-danger">Delete Selected</button>
+            </div>
+        </div>
+
+        <div class="loading">
+            <div class="spinner"></div>
+            <p>Processing repositories...</p>
+        </div>
+
+        <table class="repo-table">
+            <thead>
+                <tr>
+                    <th><input type="checkbox" id="select-all"></th>
+                    <th>Name</th>
+                    <th>Description</th>
+                    <th>Status</th>
+                    <th>Last Push</th>
+                    <th>Size</th>
+                    <th>Language</th>
+                </tr>
+            </thead>
+            <tbody id="repo-list">
+                <!-- Repository rows will be populated by JavaScript -->
+            </tbody>
+        </table>
+    </div>
+
+    <!-- Archive Modal -->
+    <div id="archive-modal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>Archive Repositories</h3>
+                <span class="close">&times;</span>
+            </div>
+            <div class="modal-body">
+                <p>You are about to archive the following repositories:</p>
+                <ul id="archive-list"></ul>
+                <p>Archiving will combine these repositories into a single zip file. The original repositories will remain unchanged.</p>
+            </div>
+            <div class="modal-footer">
+                <button id="cancel-archive" class="btn">Cancel</button>
+                <button id="confirm-archive" class="btn btn-success">Archive</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Delete Modal -->
+    <div id="delete-modal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>Delete Repositories</h3>
+                <span class="close">&times;</span>
+            </div>
+            <div class="modal-body">
+                <p>You are about to delete the following repositories:</p>
+                <ul id="delete-list"></ul>
+                <p><strong>Warning:</strong> This action cannot be undone. These repositories will be permanently deleted.</p>
+            </div>
+            <div class="modal-footer">
+                <button id="cancel-delete" class="btn">Cancel</button>
+                <button id="confirm-delete" class="btn btn-danger">Delete</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="js/main.js"></script>
+</body>
+</html>
