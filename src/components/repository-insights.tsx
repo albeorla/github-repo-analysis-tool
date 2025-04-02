@@ -59,64 +59,42 @@ export default function RepositoryInsights({
     loadInsight();
   }, [repositoryName]);
 
-  // Generate new insight using OpenAI API
+  // Generate new insight using server-side API route
   const generateInsight = async (isBackground = false) => {
     if (!isBackground) {
       setIsLoading(true);
       setError(null);
     }
     
-    const openaiToken = localStorage.getItem('openai_token');
-    
-    if (!openaiToken) {
-      if (!isBackground) {
-        setError("OpenAI API key not found. Please set your API key in settings.");
-        setIsLoading(false);
-      }
-      return;
-    }
-    
     try {
-      // Prepare repository data for the prompt
-      const repoData = {
-        name: repositoryName,
-        description: repositoryDescription,
-        url: repositoryUrl,
-        language: primaryLanguage,
-        createdAt: new Date(createdAt).toLocaleDateString(),
-        updatedAt: new Date(updatedAt).toLocaleDateString()
-      };
-      
-      // Call OpenAI API directly from client
-      const response = await fetch('https://api.openai.com/v1/chat/completions', {
+      // Call server-side API route instead of OpenAI directly
+      const response = await fetch('/api/insights', {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${openaiToken}`
+          'Content-Type': 'application/json'
         },
         body: JSON.stringify({
-          model: "gpt-3.5-turbo",
-          messages: [
-            {
-              role: "system",
-              content: "You are a GitHub repository analyzer that provides insightful analysis and recommendations. Your analysis should be concise but comprehensive."
-            },
-            {
-              role: "user",
-              content: `Analyze this GitHub repository and provide insights:\n\nRepository: ${repoData.name}\nDescription: ${repoData.description}\nPrimary Language: ${repoData.language}\nCreated: ${repoData.createdAt}\nLast Updated: ${repoData.updatedAt}\n\nPlease provide:\n1. A brief assessment of the repository's purpose and potential value\n2. Maintenance recommendations based on activity patterns\n3. Suggestions for improvements or best practices\n4. Any potential concerns or issues to address`
-            }
-          ],
-          temperature: 0.7,
-          max_tokens: 500
+          repositoryName,
+          repositoryUrl,
+          repositoryDescription,
+          primaryLanguage,
+          createdAt,
+          updatedAt
         })
       });
       
       if (!response.ok) {
-        throw new Error(`OpenAI API error: ${response.status}`);
+        const errorData = await response.json();
+        throw new Error(errorData.message || `Error ${response.status}: ${response.statusText}`);
       }
       
       const data = await response.json();
-      const generatedInsight = data.choices[0].message.content;
+      
+      if (!data.success) {
+        throw new Error(data.message || 'Failed to generate insights');
+      }
+      
+      const generatedInsight = data.insights;
       
       // Store in IndexedDB
       await db.storeInsight(repositoryName, generatedInsight);
@@ -133,7 +111,11 @@ export default function RepositoryInsights({
     } catch (err) {
       console.error("Error generating insight:", err);
       if (!isBackground) {
-        setError("Failed to generate insights. Please check your OpenAI API key and try again.");
+        if (err.message.includes('OpenAI API key is not configured')) {
+          setError("OpenAI API key is not configured in the server environment. Please contact the administrator.");
+        } else {
+          setError(`Failed to generate insights: ${err.message}`);
+        }
       }
     } finally {
       if (!isBackground) {
