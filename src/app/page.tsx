@@ -13,6 +13,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import RepositoryInsights from "@/components/repository-insights";
 import TokenSettingsDialog from "@/components/token-settings-dialog";
+import ReportGenerator from "@/components/report-generator";
 import { getRepositoryDatabase } from "@/lib/db";
 
 // Direct GitHub API client-side functions
@@ -170,6 +171,7 @@ export default function RepositoryManager() {
   const [showArchiveDialog, setShowArchiveDialog] = useState(false);
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [showInsightsDialog, setShowInsightsDialog] = useState(false);
+  const [showReportDialog, setShowReportDialog] = useState(false);
   const [selectedRepository, setSelectedRepository] = useState<Repository | null>(null);
   const [showTokenDialog, setShowTokenDialog] = useState(false);
   const [hasToken, setHasToken] = useState(false);
@@ -177,6 +179,7 @@ export default function RepositoryManager() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isDemo, setIsDemo] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<'repositories' | 'report'>('repositories');
 
   // Initialize database
   const db = getRepositoryDatabase();
@@ -204,74 +207,44 @@ export default function RepositoryManager() {
         // Initialize the database
         await db.init();
         
-        const token = localStorage.getItem('github_token');
-        let data: Repository[];
+        // Check if we have a GitHub token
+        const githubToken = localStorage.getItem('github_token');
         
-        if (token) {
-          // First check if we have cached data
-          const cachedRepos = await db.getRepositories();
-          const lastUpdateTime = await db.getLastRepoUpdateTime();
-          
-          if (cachedRepos.length > 0 && lastUpdateTime) {
-            // Use cached data
-            console.log(`Using ${cachedRepos.length} repositories from cache, last updated: ${lastUpdateTime}`);
-            data = cachedRepos;
-            setIsDemo(false);
-            
-            // Check if cache is older than 1 hour, if so refresh in background
-            const lastUpdate = new Date(lastUpdateTime);
-            const now = new Date();
-            const diffHours = (now.getTime() - lastUpdate.getTime()) / (1000 * 60 * 60);
-            
-            if (diffHours > 1) {
-              console.log('Cache is older than 1 hour, refreshing in background');
-              refreshRepositoriesInBackground(token);
-            }
-          } else {
-            // No cache or empty cache, fetch from GitHub
-            const githubRepos = await fetchRepositoriesFromGitHub(token);
-            data = await processRepositoryData(githubRepos, token);
-            
-            // Store in IndexedDB
-            await db.storeRepositories(data);
-            setIsDemo(false);
-          }
-        } else {
-          // Use mock data if no token is available
-          data = [...mockRepositoryData];
+        if (!githubToken) {
+          // If no token, use mock data
+          setRepositories(mockRepositoryData);
           setIsDemo(true);
-          // Add a small delay to simulate loading
-          await new Promise(resolve => setTimeout(resolve, 500));
+          setIsLoading(false);
+          return;
         }
         
-        setRepositories(data);
-        setFilteredRepos(data);
+        // Try to load from cache first
+        const cachedRepos = await db.getRepositories();
         
-        // Extract unique languages
-        const uniqueLanguages = new Set<string>();
-        data.forEach(repo => {
-          if (repo.primaryLanguage && repo.primaryLanguage !== 'None') {
-            uniqueLanguages.add(repo.primaryLanguage);
+        if (cachedRepos && cachedRepos.length > 0) {
+          setRepositories(cachedRepos);
+          setIsDemo(false);
+          
+          // Check if cache is expired
+          if (db.isDataExpired()) {
+            // If expired, refresh in background
+            refreshRepositoriesInBackground();
           }
-        });
-        setLanguages(Array.from(uniqueLanguages).sort());
-        
-        // Calculate summary
-        const summaryData = calculateRepositorySummary(data);
-        setSummary({
-          totalRepos: summaryData.totalRepos,
-          privateRepos: summaryData.privateRepos,
-          publicRepos: summaryData.publicRepos,
-          archivedRepos: summaryData.archivedRepos,
-          inactiveRepos: summaryData.inactiveRepos,
-          totalSizeMB: summaryData.totalSizeMB,
-        });
+        } else {
+          // No cache, fetch from GitHub API
+          const repos = await fetchRepositoriesFromGitHub(githubToken);
+          const processedRepos = await processRepositoryData(repos, githubToken);
+          
+          // Store in IndexedDB
+          await db.storeRepositories(processedRepos);
+          
+          setRepositories(processedRepos);
+          setIsDemo(false);
+        }
       } catch (error) {
         console.error('Error loading repositories:', error);
-        setErrorMessage(`Failed to load repositories: ${error instanceof Error ? error.message : String(error)}`);
-        // Use mock data as fallback
-        setRepositories([...mockRepositoryData]);
-        setFilteredRepos([...mockRepositoryData]);
+        setErrorMessage('Failed to load repositories. Please check your GitHub token and try again.');
+        setRepositories(mockRepositoryData);
         setIsDemo(true);
       } finally {
         setIsLoading(false);
@@ -281,442 +254,437 @@ export default function RepositoryManager() {
     loadRepositories();
   }, []);
 
-  // Background refresh function to update repository data without blocking UI
-  const refreshRepositoriesInBackground = async (token: string) => {
+  // Background refresh function
+  const refreshRepositoriesInBackground = async () => {
     try {
-      console.log('Starting background refresh of repositories');
+      const githubToken = localStorage.getItem('github_token');
       
-      // Fetch from GitHub
-      const githubRepos = await fetchRepositoriesFromGitHub(token);
-      const freshData = await processRepositoryData(githubRepos, token);
+      if (!githubToken) {
+        return;
+      }
+      
+      const repos = await fetchRepositoriesFromGitHub(githubToken);
+      const processedRepos = await processRepositoryData(repos, githubToken);
       
       // Store in IndexedDB
-      await db.storeRepositories(freshData);
+      await db.storeRepositories(processedRepos);
       
-      console.log('Background refresh completed, stored', freshData.length, 'repositories');
-      
-      // Update UI with new data
-      setRepositories(freshData);
-      
-      // Reapply filters to the new data
-      applyFilters(freshData);
-      
-      // Recalculate summary
-      const summaryData = calculateRepositorySummary(freshData);
-      setSummary({
-        totalRepos: summaryData.totalRepos,
-        privateRepos: summaryData.privateRepos,
-        publicRepos: summaryData.publicRepos,
-        archivedRepos: summaryData.archivedRepos,
-        inactiveRepos: summaryData.inactiveRepos,
-        totalSizeMB: summaryData.totalSizeMB,
-      });
-      
-      // Extract unique languages
-      const uniqueLanguages = new Set<string>();
-      freshData.forEach(repo => {
-        if (repo.primaryLanguage && repo.primaryLanguage !== 'None') {
-          uniqueLanguages.add(repo.primaryLanguage);
-        }
-      });
-      setLanguages(Array.from(uniqueLanguages).sort());
-      
+      // Update state
+      setRepositories(processedRepos);
+      setIsDemo(false);
     } catch (error) {
-      console.error('Error in background refresh:', error);
-      // Don't show error to user since this is a background operation
+      console.error('Error refreshing repositories in background:', error);
     }
   };
 
-  // Filter repositories when filters change
-  useEffect(() => {
-    applyFilters(repositories);
-  }, [searchTerm, visibilityFilter, activityFilter, languageFilter, repositories]);
-
-  // Apply all filters to the repository list
-  const applyFilters = (repos: Repository[]) => {
-    if (repos.length === 0) return;
+  // Refresh repositories
+  const refreshRepositories = async () => {
+    setIsRefreshing(true);
+    setErrorMessage(null);
     
-    const filtered = repos.filter(repo => {
-      // Search filter
-      const matchesSearch = 
-        searchTerm === "" || 
-        repo.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
-        (repo.description && repo.description.toLowerCase().includes(searchTerm.toLowerCase()));
+    try {
+      const githubToken = localStorage.getItem('github_token');
       
-      // Visibility filter
-      const matchesVisibility = 
-        visibilityFilter === "all" || 
-        (visibilityFilter === "public" && repo.visibility === "PUBLIC") || 
-        (visibilityFilter === "private" && repo.visibility === "PRIVATE");
+      if (!githubToken) {
+        setErrorMessage('GitHub token is required. Please set your token in settings.');
+        setIsRefreshing(false);
+        return;
+      }
       
-      // Activity filter
-      const matchesActivity = 
-        activityFilter === "all" || 
-        (activityFilter === "active" && !repo.inactive) || 
-        (activityFilter === "inactive" && repo.inactive) ||
-        (activityFilter === "archived" && repo.isArchived);
+      const repos = await fetchRepositoriesFromGitHub(githubToken);
+      const processedRepos = await processRepositoryData(repos, githubToken);
       
-      // Language filter
-      const matchesLanguage = 
-        languageFilter === "all" || 
-        repo.primaryLanguage === languageFilter;
+      // Store in IndexedDB
+      await db.storeRepositories(processedRepos);
       
-      return matchesSearch && matchesVisibility && matchesActivity && matchesLanguage;
-    });
+      setRepositories(processedRepos);
+      setIsDemo(false);
+    } catch (error) {
+      console.error('Error refreshing repositories:', error);
+      setErrorMessage('Failed to refresh repositories. Please check your GitHub token and try again.');
+    } finally {
+      setIsRefreshing(false);
+    }
+  };
+
+  // Apply filters to repositories
+  const applyFilters = () => {
+    let filtered = [...repositories];
+    
+    // Apply search filter
+    if (searchTerm) {
+      const term = searchTerm.toLowerCase();
+      filtered = filtered.filter(repo => 
+        repo.name.toLowerCase().includes(term) || 
+        (repo.description && repo.description.toLowerCase().includes(term))
+      );
+    }
+    
+    // Apply visibility filter
+    if (visibilityFilter !== 'all') {
+      filtered = filtered.filter(repo => 
+        repo.visibility === visibilityFilter
+      );
+    }
+    
+    // Apply activity filter
+    if (activityFilter !== 'all') {
+      if (activityFilter === 'active') {
+        filtered = filtered.filter(repo => !repo.inactive);
+      } else if (activityFilter === 'inactive') {
+        filtered = filtered.filter(repo => repo.inactive);
+      } else if (activityFilter === 'archived') {
+        filtered = filtered.filter(repo => repo.isArchived);
+      }
+    }
+    
+    // Apply language filter
+    if (languageFilter !== 'all') {
+      filtered = filtered.filter(repo => 
+        repo.primaryLanguage === languageFilter
+      );
+    }
     
     setFilteredRepos(filtered);
   };
 
-  // Handle repository selection
-  const toggleRepoSelection = (repoName: string) => {
-    const newSelection = new Set(selectedRepos);
-    if (newSelection.has(repoName)) {
-      newSelection.delete(repoName);
+  // Update filters when repositories or filter values change
+  useEffect(() => {
+    applyFilters();
+    
+    // Extract unique languages
+    const uniqueLanguages = new Set<string>();
+    repositories.forEach(repo => {
+      if (repo.primaryLanguage && repo.primaryLanguage !== 'None') {
+        uniqueLanguages.add(repo.primaryLanguage);
+      }
+    });
+    setLanguages(Array.from(uniqueLanguages).sort());
+    
+    // Calculate summary
+    const summaryData = calculateRepositorySummary(repositories);
+    setSummary(summaryData);
+  }, [repositories, searchTerm, visibilityFilter, activityFilter, languageFilter]);
+
+  // Toggle repository selection
+  const toggleRepositorySelection = (repoName: string) => {
+    const newSelected = new Set(selectedRepos);
+    if (newSelected.has(repoName)) {
+      newSelected.delete(repoName);
     } else {
-      newSelection.add(repoName);
+      newSelected.add(repoName);
     }
-    setSelectedRepos(newSelection);
+    setSelectedRepos(newSelected);
   };
 
-  // Select or deselect all repositories
+  // Select/deselect all repositories
   const toggleSelectAll = () => {
     if (selectedRepos.size === filteredRepos.length) {
       // Deselect all
       setSelectedRepos(new Set());
     } else {
       // Select all
-      const newSelection = new Set<string>();
-      filteredRepos.forEach(repo => newSelection.add(repo.name));
-      setSelectedRepos(newSelection);
+      const newSelected = new Set<string>();
+      filteredRepos.forEach(repo => newSelected.add(repo.name));
+      setSelectedRepos(newSelected);
     }
   };
 
-  // Handle refresh button click
-  const handleRefresh = async () => {
-    setIsRefreshing(true);
-    setError(null);
+  // Archive selected repositories
+  const archiveSelectedRepositories = async () => {
+    if (selectedRepos.size === 0) return;
     
-    const token = localStorage.getItem('github_token');
-    if (!token) {
-      setError('GitHub token not found. Please set your token in settings.');
-      setIsRefreshing(false);
-      return;
-    }
+    setIsLoading(true);
+    setErrorMessage(null);
     
     try {
-      // Fetch from GitHub
-      const githubRepos = await fetchRepositoriesFromGitHub(token);
-      const freshData = await processRepositoryData(githubRepos, token);
+      const githubToken = localStorage.getItem('github_token');
       
-      // Store in IndexedDB
-      await db.storeRepositories(freshData);
-      
-      // Update state
-      setRepositories(freshData);
-      setIsDemo(false);
-      
-      // Extract unique languages
-      const uniqueLanguages = new Set<string>();
-      freshData.forEach(repo => {
-        if (repo.primaryLanguage && repo.primaryLanguage !== 'None') {
-          uniqueLanguages.add(repo.primaryLanguage);
-        }
-      });
-      setLanguages(Array.from(uniqueLanguages).sort());
-      
-      // Calculate summary
-      const summaryData = calculateRepositorySummary(freshData);
-      setSummary({
-        totalRepos: summaryData.totalRepos,
-        privateRepos: summaryData.privateRepos,
-        publicRepos: summaryData.publicRepos,
-        archivedRepos: summaryData.archivedRepos,
-        inactiveRepos: summaryData.inactiveRepos,
-        totalSizeMB: summaryData.totalSizeMB,
-      });
-    } catch (err) {
-      console.error('Error refreshing repositories:', err);
-      setError('Failed to refresh repositories. Please check your GitHub token and try again.');
-    } finally {
-      setIsRefreshing(false);
-    }
-  };
-
-  // Function to handle token settings save
-  const handleTokenSave = async (githubToken: string, openaiToken: string) => {
-    setIsLoading(true);
-    setError(null);
-    
-    // Update OpenAI token state
-    setHasOpenAIToken(!!openaiToken);
-    
-    // Initialize the database
-    await db.init();
-    
-    if (githubToken) {
-      try {
-        // Fetch repositories with the new token
-        const repos = await fetchRepositoriesFromGitHub(githubToken);
-        const processedRepos = await processRepositoryData(repos, githubToken);
-        
-        // Store in IndexedDB
-        await db.storeRepositories(processedRepos);
-        
-        // Update state
-        setRepositories(processedRepos);
-        setFilteredRepos(processedRepos);
-        setIsDemo(false);
-        setHasToken(true);
-        
-        // Extract unique languages
-        const uniqueLanguages = new Set<string>();
-        processedRepos.forEach(repo => {
-          if (repo.primaryLanguage && repo.primaryLanguage !== 'None') {
-            uniqueLanguages.add(repo.primaryLanguage);
-          }
-        });
-        setLanguages(Array.from(uniqueLanguages).sort());
-        
-        // Calculate summary
-        const summaryData = calculateRepositorySummary(processedRepos);
-        setSummary({
-          totalRepos: summaryData.totalRepos,
-          privateRepos: summaryData.privateRepos,
-          publicRepos: summaryData.publicRepos,
-          archivedRepos: summaryData.archivedRepos,
-          inactiveRepos: summaryData.inactiveRepos,
-          totalSizeMB: summaryData.totalSizeMB,
-        });
-      } catch (err) {
-        console.error('Error fetching repositories:', err);
-        setError('Failed to fetch repositories. Please check your GitHub token and try again.');
-        
-        // Use mock data as fallback
-        setRepositories(mockRepositoryData);
-        setFilteredRepos(mockRepositoryData);
-        setIsDemo(true);
+      if (!githubToken) {
+        setErrorMessage('GitHub token is required. Please set your token in settings.');
+        setIsLoading(false);
+        return;
       }
-    } else {
-      // If no token provided, use demo data
-      setRepositories(mockRepositoryData);
-      setFilteredRepos(mockRepositoryData);
-      setIsDemo(true);
-      setHasToken(false);
+      
+      const response = await fetch('/api/archive', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-github-token': githubToken
+        },
+        body: JSON.stringify({ repositories: Array.from(selectedRepos) }),
+      });
+      
+      if (!response.ok) {
+        throw new Error(`Error archiving repositories: ${response.statusText}`);
+      }
+      
+      const result = await response.json();
+      
+      if (result.success) {
+        // Refresh repositories after archiving
+        await refreshRepositories();
+        setSelectedRepos(new Set());
+        setShowArchiveDialog(false);
+      } else {
+        throw new Error(result.message || 'Unknown error occurred');
+      }
+    } catch (error) {
+      console.error('Error archiving repositories:', error);
+      setErrorMessage(`Failed to archive repositories: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    } finally {
+      setIsLoading(false);
     }
+  };
+
+  // Delete selected repositories
+  const deleteSelectedRepositories = async () => {
+    if (selectedRepos.size === 0) return;
     
-    setIsLoading(false);
+    setIsLoading(true);
+    setErrorMessage(null);
+    
+    try {
+      const githubToken = localStorage.getItem('github_token');
+      
+      if (!githubToken) {
+        setErrorMessage('GitHub token is required. Please set your token in settings.');
+        setIsLoading(false);
+        return;
+      }
+      
+      const response = await fetch('/api/delete', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-github-token': githubToken
+        },
+        body: JSON.stringify({ repositories: Array.from(selectedRepos) }),
+      });
+      
+      if (!response.ok) {
+        throw new Error(`Error deleting repositories: ${response.statusText}`);
+      }
+      
+      const result = await response.json();
+      
+      if (result.success) {
+        // Refresh repositories after deletion
+        await refreshRepositories();
+        setSelectedRepos(new Set());
+        setShowDeleteDialog(false);
+      } else {
+        throw new Error(result.message || 'Unknown error occurred');
+      }
+    } catch (error) {
+      console.error('Error deleting repositories:', error);
+      setErrorMessage(`Failed to delete repositories: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    } finally {
+      setIsLoading(false);
+    }
   };
 
-  // Handle archive button click
-  const handleArchive = () => {
-    if (selectedRepos.size === 0) return;
-    setShowArchiveDialog(true);
-  };
-
-  // Handle delete button click
-  const handleDelete = () => {
-    if (selectedRepos.size === 0) return;
-    setShowDeleteDialog(true);
-  };
-
-  // Handle insights button click
-  const handleInsights = (repo: Repository) => {
-    setSelectedRepository(repo);
+  // Show repository insights
+  const showInsights = (repository: Repository) => {
+    setSelectedRepository(repository);
     setShowInsightsDialog(true);
   };
 
-  // Format date for display
-  const formatDate = (dateString: string) => {
-    const date = new Date(dateString);
-    return date.toLocaleDateString();
-  };
-
-  // Format file size for display
-  const formatSize = (sizeInMB: number) => {
-    if (sizeInMB < 0.1) return "< 0.1 MB";
-    return `${sizeInMB.toFixed(1)} MB`;
-  };
-
   return (
-    <div className="container mx-auto py-6 max-w-7xl">
-      <div className="flex justify-between items-center mb-6">
-        <h1 className="text-3xl font-bold">GitHub Repository Manager</h1>
-        <div className="flex gap-2">
-          <Button 
-            variant="outline" 
-            onClick={() => setShowTokenDialog(true)}
-          >
-            {hasToken ? "Change Token" : "Set GitHub Token"}
-          </Button>
-          <Button 
-            onClick={handleRefresh} 
-            disabled={isRefreshing || !hasToken}
-          >
-            {isRefreshing ? "Refreshing..." : "Refresh Repository Data"}
-          </Button>
-        </div>
-      </div>
-
-      {isDemo && (
-        <div className="bg-yellow-50 border border-yellow-200 text-yellow-700 px-4 py-3 rounded mb-6">
-          <p className="font-medium">Demo Mode</p>
-          <p>You're viewing sample repository data. Set your GitHub token to see your actual repositories.</p>
-        </div>
-      )}
-
-      {error && (
-        <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded mb-6">
-          {error}
-        </div>
-      )}
-
+    <main className="container mx-auto py-6 px-4">
+      <h1 className="text-3xl font-bold mb-6">GitHub Repository Manager</h1>
+      
+      {/* Error message */}
       {errorMessage && (
         <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded mb-6">
           {errorMessage}
         </div>
       )}
-
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
+      
+      {/* Demo mode warning */}
+      {isDemo && (
+        <div className="bg-amber-50 border border-amber-200 text-amber-700 px-4 py-3 rounded mb-6">
+          <p className="font-medium">Demo Mode</p>
+          <p>You're viewing example data. Set your GitHub token to see your actual repositories.</p>
+          <Button 
+            variant="outline" 
+            size="sm" 
+            onClick={() => setShowTokenDialog(true)}
+            className="mt-2"
+          >
+            Set GitHub Token
+          </Button>
+        </div>
+      )}
+      
+      {/* Repository summary */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
         <Card>
           <CardHeader className="pb-2">
-            <CardTitle>Repository Count</CardTitle>
+            <CardTitle className="text-sm font-medium">Total Repositories</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="text-4xl font-bold">{summary.totalRepos}</div>
-            <div className="text-sm text-gray-500 mt-2">
-              {summary.publicRepos} public / {summary.privateRepos} private
-            </div>
+            <div className="text-2xl font-bold">{summary.totalRepos}</div>
+            <p className="text-xs text-gray-500">
+              {summary.publicRepos} public, {summary.privateRepos} private
+            </p>
           </CardContent>
         </Card>
         <Card>
           <CardHeader className="pb-2">
-            <CardTitle>Storage Used</CardTitle>
+            <CardTitle className="text-sm font-medium">Repository Status</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="text-4xl font-bold">{summary.totalSizeMB.toFixed(1)} MB</div>
-            <div className="text-sm text-gray-500 mt-2">
-              Across {summary.totalRepos} repositories
-            </div>
+            <div className="text-2xl font-bold">{summary.archivedRepos}</div>
+            <p className="text-xs text-gray-500">
+              Archived repositories
+            </p>
+            <div className="text-2xl font-bold mt-2">{summary.inactiveRepos}</div>
+            <p className="text-xs text-gray-500">
+              Inactive repositories (no pushes in 6 months)
+            </p>
           </CardContent>
         </Card>
         <Card>
           <CardHeader className="pb-2">
-            <CardTitle>Repository Status</CardTitle>
+            <CardTitle className="text-sm font-medium">Total Size</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="text-4xl font-bold">{summary.archivedRepos}</div>
-            <div className="text-sm text-gray-500 mt-2">
-              Archived / {summary.inactiveRepos} Inactive
-            </div>
+            <div className="text-2xl font-bold">{summary.totalSizeMB.toFixed(2)} MB</div>
+            <p className="text-xs text-gray-500">
+              Across all repositories
+            </p>
           </CardContent>
         </Card>
       </div>
-
-      <div className="bg-white rounded-lg shadow mb-6">
-        <div className="p-4 border-b">
-          <h2 className="text-xl font-semibold">Repository List</h2>
-        </div>
-        <div className="p-4 grid grid-cols-1 md:grid-cols-4 gap-4">
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Search</label>
-            <Input
-              type="text"
-              placeholder="Search repositories..."
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-            />
+      
+      {/* Tabs */}
+      <div className="flex border-b mb-6">
+        <button
+          className={`px-4 py-2 font-medium ${activeTab === 'repositories' ? 'border-b-2 border-blue-500 text-blue-600' : 'text-gray-500'}`}
+          onClick={() => setActiveTab('repositories')}
+        >
+          Repositories
+        </button>
+        <button
+          className={`px-4 py-2 font-medium ${activeTab === 'report' ? 'border-b-2 border-blue-500 text-blue-600' : 'text-gray-500'}`}
+          onClick={() => setActiveTab('report')}
+        >
+          Analysis Report
+        </button>
+      </div>
+      
+      {activeTab === 'repositories' ? (
+        <>
+          {/* Repository filters */}
+          <div className="flex flex-col md:flex-row gap-4 mb-6">
+            <div className="flex-1">
+              <Input
+                placeholder="Search repositories..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+              />
+            </div>
+            <div className="flex flex-col sm:flex-row gap-2">
+              <Select value={visibilityFilter} onValueChange={setVisibilityFilter}>
+                <SelectTrigger className="w-[180px]">
+                  <SelectValue placeholder="Visibility" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Visibility</SelectItem>
+                  <SelectItem value="PUBLIC">Public</SelectItem>
+                  <SelectItem value="PRIVATE">Private</SelectItem>
+                </SelectContent>
+              </Select>
+              
+              <Select value={activityFilter} onValueChange={setActivityFilter}>
+                <SelectTrigger className="w-[180px]">
+                  <SelectValue placeholder="Activity" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Status</SelectItem>
+                  <SelectItem value="active">Active</SelectItem>
+                  <SelectItem value="inactive">Inactive</SelectItem>
+                  <SelectItem value="archived">Archived</SelectItem>
+                </SelectContent>
+              </Select>
+              
+              <Select value={languageFilter} onValueChange={setLanguageFilter}>
+                <SelectTrigger className="w-[180px]">
+                  <SelectValue placeholder="Language" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Languages</SelectItem>
+                  {languages.map(lang => (
+                    <SelectItem key={lang} value={lang}>{lang}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              
+              <Button 
+                variant="outline" 
+                onClick={refreshRepositories}
+                disabled={isRefreshing || isLoading}
+              >
+                {isRefreshing ? "Refreshing..." : "Refresh"}
+              </Button>
+            </div>
           </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Visibility</label>
-            <Select value={visibilityFilter} onValueChange={setVisibilityFilter}>
-              <SelectTrigger>
-                <SelectValue placeholder="Select visibility" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All</SelectItem>
-                <SelectItem value="public">Public</SelectItem>
-                <SelectItem value="private">Private</SelectItem>
-              </SelectContent>
-            </Select>
+          
+          {/* Repository actions */}
+          <div className="flex justify-between items-center mb-4">
+            <div className="flex items-center">
+              <Checkbox 
+                id="select-all" 
+                checked={selectedRepos.size > 0 && selectedRepos.size === filteredRepos.length}
+                onCheckedChange={toggleSelectAll}
+                className="mr-2"
+              />
+              <label 
+                htmlFor="select-all" 
+                className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70"
+              >
+                {selectedRepos.size === 0 ? "Select All" : 
+                  selectedRepos.size === filteredRepos.length ? "Deselect All" : 
+                  `Selected ${selectedRepos.size} of ${filteredRepos.length}`}
+              </label>
+            </div>
+            
+            <div className="flex gap-2">
+              <Button 
+                variant="outline" 
+                onClick={() => setShowTokenDialog(true)}
+              >
+                Settings
+              </Button>
+              
+              <Button 
+                variant="outline" 
+                onClick={() => setShowArchiveDialog(true)}
+                disabled={selectedRepos.size === 0}
+              >
+                Archive Selected
+              </Button>
+              
+              <Button 
+                variant="outline" 
+                onClick={() => setShowDeleteDialog(true)}
+                disabled={selectedRepos.size === 0}
+                className="text-red-600 hover:text-red-700"
+              >
+                Delete Selected
+              </Button>
+            </div>
           </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Activity</label>
-            <Select value={activityFilter} onValueChange={setActivityFilter}>
-              <SelectTrigger>
-                <SelectValue placeholder="Select activity" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All</SelectItem>
-                <SelectItem value="active">Active</SelectItem>
-                <SelectItem value="inactive">Inactive</SelectItem>
-                <SelectItem value="archived">Archived</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Language</label>
-            <Select value={languageFilter} onValueChange={setLanguageFilter}>
-              <SelectTrigger>
-                <SelectValue placeholder="Select language" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All Languages</SelectItem>
-                {languages.map((lang) => (
-                  <SelectItem key={lang} value={lang}>{lang}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-        </div>
-
-        <div className="p-4 border-t flex justify-between items-center">
-          <div className="flex items-center space-x-2">
-            <Checkbox 
-              id="selectAll" 
-              checked={selectedRepos.size === filteredRepos.length && filteredRepos.length > 0} 
-              onCheckedChange={toggleSelectAll}
-            />
-            <label htmlFor="selectAll" className="text-sm font-medium">
-              {selectedRepos.size === 0 
-                ? "Select All" 
-                : `Selected ${selectedRepos.size} of ${filteredRepos.length}`}
-            </label>
-          </div>
-          <div className="flex space-x-2">
-            <Button 
-              variant="outline" 
-              onClick={handleArchive}
-              disabled={selectedRepos.size === 0}
-            >
-              Archive Selected
-            </Button>
-            <Button 
-              variant="destructive" 
-              onClick={handleDelete}
-              disabled={selectedRepos.size === 0}
-            >
-              Delete Selected
-            </Button>
-          </div>
-        </div>
-
-        {isLoading ? (
-          <div className="p-8 text-center">
-            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-gray-900 mx-auto"></div>
-            <p className="mt-4 text-gray-600">Loading repositories...</p>
-          </div>
-        ) : filteredRepos.length === 0 ? (
-          <div className="p-8 text-center">
-            <p className="text-gray-600">No repositories found matching your filters.</p>
-          </div>
-        ) : (
-          <div className="overflow-x-auto">
+          
+          {/* Repository table */}
+          <div className="border rounded-md">
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead className="w-12"></TableHead>
+                  <TableHead className="w-[50px]"></TableHead>
                   <TableHead>Repository</TableHead>
-                  <TableHead>Visibility</TableHead>
+                  <TableHead>Status</TableHead>
                   <TableHead>Language</TableHead>
                   <TableHead>Last Push</TableHead>
                   <TableHead>Size</TableHead>
@@ -724,178 +692,176 @@ export default function RepositoryManager() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {filteredRepos.map((repo) => (
-                  <TableRow key={repo.name} className={repo.isArchived ? "bg-gray-50" : ""}>
-                    <TableCell>
-                      <Checkbox 
-                        checked={selectedRepos.has(repo.name)} 
-                        onCheckedChange={() => toggleRepoSelection(repo.name)}
-                      />
-                    </TableCell>
-                    <TableCell>
-                      <div>
-                        <a 
-                          href={repo.url} 
-                          target="_blank" 
-                          rel="noopener noreferrer"
-                          className="font-medium hover:underline"
-                        >
-                          {repo.name}
-                        </a>
-                        {repo.isArchived && (
-                          <Badge variant="outline" className="ml-2">Archived</Badge>
-                        )}
-                        {repo.inactive && !repo.isArchived && (
-                          <Badge variant="outline" className="ml-2 bg-yellow-50">Inactive</Badge>
-                        )}
-                        <p className="text-sm text-gray-500 truncate max-w-md">
-                          {repo.description || "No description"}
-                        </p>
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      <Badge variant={repo.visibility === "PUBLIC" ? "default" : "secondary"}>
-                        {repo.visibility.toLowerCase()}
-                      </Badge>
-                    </TableCell>
-                    <TableCell>{repo.primaryLanguage}</TableCell>
-                    <TableCell>
-                      <div>
-                        {formatDate(repo.pushedAt)}
-                        <p className="text-sm text-gray-500">
-                          {repo.daysSinceLastPush} days ago
-                        </p>
-                      </div>
-                    </TableCell>
-                    <TableCell>{formatSize(repo.diskUsageMB)}</TableCell>
-                    <TableCell className="text-right">
-                      <Button 
-                        variant="ghost" 
-                        size="sm"
-                        onClick={() => handleInsights(repo)}
-                        disabled={!hasOpenAIToken}
-                        title={!hasOpenAIToken ? "Set OpenAI API key to enable insights" : "View AI-powered insights"}
-                      >
-                        Insights
-                      </Button>
+                {isLoading ? (
+                  <TableRow>
+                    <TableCell colSpan={7} className="text-center py-8">
+                      Loading repositories...
                     </TableCell>
                   </TableRow>
-                ))}
+                ) : filteredRepos.length === 0 ? (
+                  <TableRow>
+                    <TableCell colSpan={7} className="text-center py-8">
+                      No repositories found matching your filters.
+                    </TableCell>
+                  </TableRow>
+                ) : (
+                  filteredRepos.map(repo => (
+                    <TableRow key={repo.name}>
+                      <TableCell>
+                        <Checkbox 
+                          checked={selectedRepos.has(repo.name)}
+                          onCheckedChange={() => toggleRepositorySelection(repo.name)}
+                        />
+                      </TableCell>
+                      <TableCell>
+                        <div className="font-medium">{repo.name}</div>
+                        <div className="text-sm text-gray-500">{repo.description || 'No description'}</div>
+                        <div className="text-xs text-blue-600 mt-1">
+                          <a href={repo.url} target="_blank" rel="noopener noreferrer">
+                            View on GitHub
+                          </a>
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        {repo.isArchived ? (
+                          <Badge variant="outline" className="bg-gray-100">Archived</Badge>
+                        ) : repo.inactive ? (
+                          <Badge variant="outline" className="bg-amber-100">Inactive</Badge>
+                        ) : (
+                          <Badge variant="outline" className="bg-green-100">Active</Badge>
+                        )}
+                        <div className="text-xs text-gray-500 mt-1">
+                          {repo.visibility === 'PUBLIC' ? 'Public' : 'Private'}
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        {repo.primaryLanguage !== 'None' ? (
+                          <Badge variant="outline">{repo.primaryLanguage}</Badge>
+                        ) : (
+                          <span className="text-gray-500">-</span>
+                        )}
+                      </TableCell>
+                      <TableCell>
+                        <div>{new Date(repo.pushedAt).toLocaleDateString()}</div>
+                        <div className="text-xs text-gray-500">
+                          {repo.daysSinceLastPush} days ago
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        {repo.diskUsageMB.toFixed(2)} MB
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <Button 
+                          variant="ghost" 
+                          size="sm"
+                          onClick={() => showInsights(repo)}
+                          disabled={!hasOpenAIToken && !isDemo}
+                        >
+                          Insights
+                        </Button>
+                      </TableCell>
+                    </TableRow>
+                  ))
+                )}
               </TableBody>
             </Table>
           </div>
-        )}
-      </div>
-
-      {/* Archive Dialog */}
+        </>
+      ) : (
+        <ReportGenerator repositories={repositories} selectedRepos={selectedRepos} />
+      )}
+      
+      {/* Token settings dialog */}
+      <TokenSettingsDialog 
+        open={showTokenDialog} 
+        onOpenChange={setShowTokenDialog}
+        onTokensUpdated={() => {
+          setHasToken(!!localStorage.getItem('github_token'));
+          setHasOpenAIToken(!!localStorage.getItem('openai_token'));
+          refreshRepositories();
+        }}
+      />
+      
+      {/* Archive confirmation dialog */}
       <Dialog open={showArchiveDialog} onOpenChange={setShowArchiveDialog}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Archive Repositories</DialogTitle>
             <DialogDescription>
-              Are you sure you want to archive the selected repositories? This will combine them into a zip file.
+              Are you sure you want to archive {selectedRepos.size} repositories? This will create a backup zip file.
             </DialogDescription>
           </DialogHeader>
-          <div className="py-4">
-            <p className="text-sm text-gray-500">
-              Selected repositories ({selectedRepos.size}):
-            </p>
-            <ul className="mt-2 text-sm">
-              {Array.from(selectedRepos).slice(0, 5).map(name => (
-                <li key={name} className="text-gray-700">{name}</li>
+          <div className="max-h-[200px] overflow-y-auto">
+            <ul className="list-disc pl-6">
+              {Array.from(selectedRepos).map(repoName => (
+                <li key={repoName}>{repoName}</li>
               ))}
-              {selectedRepos.size > 5 && (
-                <li className="text-gray-500">...and {selectedRepos.size - 5} more</li>
-              )}
             </ul>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setShowArchiveDialog(false)}>
-              Cancel
-            </Button>
-            <Button onClick={() => {
-              // Archive logic would go here
-              setShowArchiveDialog(false);
-              setSelectedRepos(new Set());
-            }}>
-              Archive Repositories
+            <Button variant="outline" onClick={() => setShowArchiveDialog(false)}>Cancel</Button>
+            <Button onClick={archiveSelectedRepositories} disabled={isLoading}>
+              {isLoading ? "Archiving..." : "Archive Repositories"}
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
-
-      {/* Delete Dialog */}
+      
+      {/* Delete confirmation dialog */}
       <Dialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Delete Repositories</DialogTitle>
             <DialogDescription>
-              Are you sure you want to delete the selected repositories? This action cannot be undone.
+              Are you sure you want to delete {selectedRepos.size} repositories? This action cannot be undone.
             </DialogDescription>
           </DialogHeader>
-          <div className="py-4">
-            <p className="text-sm text-gray-500">
-              Selected repositories ({selectedRepos.size}):
-            </p>
-            <ul className="mt-2 text-sm">
-              {Array.from(selectedRepos).slice(0, 5).map(name => (
-                <li key={name} className="text-gray-700">{name}</li>
+          <div className="max-h-[200px] overflow-y-auto">
+            <ul className="list-disc pl-6">
+              {Array.from(selectedRepos).map(repoName => (
+                <li key={repoName}>{repoName}</li>
               ))}
-              {selectedRepos.size > 5 && (
-                <li className="text-gray-500">...and {selectedRepos.size - 5} more</li>
-              )}
             </ul>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setShowDeleteDialog(false)}>
-              Cancel
-            </Button>
-            <Button variant="destructive" onClick={() => {
-              // Delete logic would go here
-              setShowDeleteDialog(false);
-              setSelectedRepos(new Set());
-            }}>
-              Delete Repositories
+            <Button variant="outline" onClick={() => setShowDeleteDialog(false)}>Cancel</Button>
+            <Button 
+              onClick={deleteSelectedRepositories} 
+              disabled={isLoading}
+              className="bg-red-600 hover:bg-red-700"
+            >
+              {isLoading ? "Deleting..." : "Delete Repositories"}
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
-
-      {/* Insights Dialog */}
+      
+      {/* Repository insights dialog */}
       <Dialog open={showInsightsDialog} onOpenChange={setShowInsightsDialog}>
-        <DialogContent className="sm:max-w-[600px]">
+        <DialogContent className="max-w-3xl">
           <DialogHeader>
             <DialogTitle>Repository Insights</DialogTitle>
             <DialogDescription>
-              AI-powered analysis for {selectedRepository?.name}
+              AI-powered analysis and recommendations for {selectedRepository?.name}
             </DialogDescription>
           </DialogHeader>
+          
           {selectedRepository && (
-            <div className="py-4">
-              <RepositoryInsights
-                repositoryName={selectedRepository.name}
-                repositoryUrl={selectedRepository.url}
-                repositoryDescription={selectedRepository.description || ''}
-                primaryLanguage={selectedRepository.primaryLanguage}
-                createdAt={selectedRepository.createdAt}
-                updatedAt={selectedRepository.updatedAt}
-              />
-            </div>
+            <RepositoryInsights
+              repositoryName={selectedRepository.name}
+              repositoryUrl={selectedRepository.url}
+              repositoryDescription={selectedRepository.description}
+              primaryLanguage={selectedRepository.primaryLanguage}
+              createdAt={selectedRepository.createdAt}
+              updatedAt={selectedRepository.updatedAt}
+            />
           )}
+          
           <DialogFooter>
-            <Button onClick={() => setShowInsightsDialog(false)}>
-              Close
-            </Button>
+            <Button variant="outline" onClick={() => setShowInsightsDialog(false)}>Close</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
-
-      {/* Token Settings Dialog */}
-      <TokenSettingsDialog
-        isOpen={showTokenDialog}
-        onClose={() => setShowTokenDialog(false)}
-        onSave={handleTokenSave}
-      />
-    </div>
+    </main>
   );
 }
